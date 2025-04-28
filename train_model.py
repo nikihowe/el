@@ -21,7 +21,7 @@ wandb.init(project="el_takehome")
 config_values = {
     # Model & Tokenizer
     "model_name": "EleutherAI/pythia-70m",
-    "block_size": 1024,
+    "block_size": 2048,  # Match Pythia's context window size
 
     # Data
     "dataset_path": "arxiv-metadata-oai-snapshot.jsonl",
@@ -77,30 +77,9 @@ model_config = AutoConfig.from_pretrained(
 )
 
 print(f"Initializing {config_values['model_name']} model from scratch...")
+# from_config without pretrained weights initializes the model with random weights
 model = AutoModelForCausalLM.from_config(model_config)
 model.resize_token_embeddings(len(tokenizer))
-
-print(f"Loading dataset: {config_values['dataset_path']}...")
-# Load the JSONL dataset (expecting a 'train' split by default)
-raw_dataset = load_dataset('json', data_files=config_values["dataset_path"])
-
-# Split the dataset into training and validation
-if "train" in raw_dataset:
-    split_dataset = raw_dataset["train"].train_test_split(
-        test_size=config_values['validation_split_percentage'] / 100.0,
-        seed=42 # for reproducibility
-    )
-    # Rename 'test' split to 'validation' for clarity
-    split_dataset['validation'] = split_dataset.pop('test')
-    print(f"Split dataset into {100-config_values['validation_split_percentage']}% train and {config_values['validation_split_percentage']}% validation.")
-else:
-    print("Warning: 'train' split not found in dataset. Using the entire dataset for training.")
-    # If no 'train' split, create a dummy DatasetDict for consistency
-    # You might need to adjust this logic based on your actual dataset structure
-    split_dataset = DatasetDict({"train": raw_dataset})
-    config_values["eval_strategy"] = "no" # Disable evaluation if no split
-    print("Disabling evaluation as no validation split could be created.")
-
 
 # --- Tokenization Function ---
 def tokenize_function(examples):
@@ -112,16 +91,6 @@ def tokenize_function(examples):
         print(f"Warning: Skipped {len(texts) - len(valid_texts)} non-string or None entries in field '{config_values['text_field']}'.")
     return tokenizer(valid_texts)
 # --- End Tokenization Function ---
-
-print("Applying tokenization...")
-tokenized_datasets = split_dataset.map(
-    tokenize_function,
-    batched=True,
-    num_proc=config_values["preprocessing_num_workers"],
-    remove_columns=next(iter(split_dataset.values())).column_names, # Get columns from first split
-    load_from_cache_file=not config_values["overwrite_cache"],
-    desc="Running tokenizer on dataset splits",
-)
 
 # --- Block Processing Function ---
 block_size = config_values["block_size"]
@@ -137,14 +106,60 @@ def group_texts(examples):
     return result
 # --- End Block Processing Function ---
 
-print(f"Grouping texts into blocks of size {block_size}...")
-lm_datasets = tokenized_datasets.map(
-    group_texts,
-    batched=True,
-    num_proc=config_values["preprocessing_num_workers"],
-    load_from_cache_file=not config_values["overwrite_cache"],
-    desc=f"Grouping texts into chunks of {block_size}",
-)
+print(f"Loading dataset: {config_values['dataset_path']}...")
+# Load the JSONL dataset (expecting a 'train' split by default)
+raw_dataset = load_dataset('json', data_files=config_values["dataset_path"])
+
+# Try to load saved processed datasets
+try:
+    print("Attempting to load saved processed datasets...")
+    lm_datasets = load_dataset("processed_datasets")
+    print("Successfully loaded saved processed datasets!")
+except Exception as e:
+    print(f"Could not load saved datasets: {e}")
+    print("Processing datasets from scratch...")
+    
+    # Split the dataset into training and validation
+    if "train" in raw_dataset:
+        split_dataset = raw_dataset["train"].train_test_split(
+            test_size=config_values['validation_split_percentage'] / 100.0,
+            seed=42 # for reproducibility
+        )
+        # Rename 'test' split to 'validation' for clarity
+        split_dataset['validation'] = split_dataset.pop('test')
+        print(f"Split dataset into {100-config_values['validation_split_percentage']}% train and {config_values['validation_split_percentage']}% validation.")
+    else:
+        print("Warning: 'train' split not found in dataset. Using the entire dataset for training.")
+        # If no 'train' split, create a dummy DatasetDict for consistency
+        # You might need to adjust this logic based on your actual dataset structure
+        split_dataset = DatasetDict({"train": raw_dataset})
+        config_values["eval_strategy"] = "no" # Disable evaluation if no split
+        print("Disabling evaluation as no validation split could be created.")
+
+    print("Applying tokenization...")
+    tokenized_datasets = split_dataset.map(
+        tokenize_function,
+        batched=True,
+        num_proc=config_values["preprocessing_num_workers"],
+        remove_columns=next(iter(split_dataset.values())).column_names, # Get columns from first split
+        load_from_cache_file=not config_values["overwrite_cache"],
+        desc="Running tokenizer on dataset splits",
+    )
+
+    # Save tokenized datasets
+    tokenized_datasets.save_to_disk("tokenized_datasets")
+
+    print(f"Grouping texts into blocks of size {block_size}...")
+    lm_datasets = tokenized_datasets.map(
+        group_texts,
+        batched=True,
+        num_proc=config_values["preprocessing_num_workers"],
+        load_from_cache_file=not config_values["overwrite_cache"],
+        desc=f"Grouping texts into chunks of {block_size}",
+    )
+
+    # Save processed datasets
+    lm_datasets.save_to_disk("processed_datasets")
 
 # Assign train and validation datasets
 train_dataset = lm_datasets["train"]
