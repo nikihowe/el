@@ -53,7 +53,8 @@ config_values = {
     "adam_beta1": 0.9,
     "adam_beta2": 0.95, # Slightly different beta2 sometimes helps
     "adam_epsilon": 1e-6,
-    "fp16": True, # Requires CUDA and appropriate libraries (apex or native torch)
+    "fp16": False, # Requires CUDA and appropriate libraries (apex or native torch)
+    "bf16": True,
     # "fp16_opt_level": "O2",  # Often not needed with native AMP
     "fp16_full_eval": False, # Usually False is fine
 
@@ -79,7 +80,16 @@ if config_values["fp16"] and not torch.cuda.is_available():
      config_values["fp16"] = False # Disable fp16 if CUDA not found
 
 # Initialize Accelerator for device placement and fp16 handling
-accelerator = Accelerator(mixed_precision='fp16' if config_values["fp16"] else 'no')
+# Determine mixed precision mode for Accelerator based on config AND support checks
+if config_values["bf16"]: # bf16 takes precedence if enabled and supported (checked above)
+    precision_mode = 'bf16'
+elif config_values["fp16"]: # Check fp16 only if bf16 is not used
+    precision_mode = 'fp16'
+else:
+    precision_mode = 'no' # Default to no mixed precision
+
+print(f"Initializing Accelerator with mixed_precision='{precision_mode}'")
+accelerator = Accelerator(mixed_precision=precision_mode)
 print(f"Using device: {accelerator.device}")
 
 print("Loading tokenizer...")
@@ -435,6 +445,7 @@ training_args = TrainingArguments(
     # Other args
     dataloader_num_workers=config_values["dataloader_num_workers"],
     fp16=config_values["fp16"],
+    bf16=config_values["bf16"],
     # fp16_opt_level=config_values.get("fp16_opt_level"), # Usually handled by Accelerator/Trainer
     seed=config_values["seed"],
     logging_first_step=True, # Log metrics at the first step
