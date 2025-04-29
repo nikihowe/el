@@ -58,9 +58,7 @@ config_values = {
     'adam_beta1': 0.9,
     'adam_beta2': 0.95,
     'adam_epsilon': 1e-6,  # NOTE: raising this from 1e-8 was necessary for stability
-    'fp16': False,  # NOTE: fp16 caused `Attempting to unscale FP16 gradients` error
-    'bf16': True,
-    'fp16_full_eval': False,
+    'bf16': True,  # NOTE: fp16 caused `Attempting to unscale FP16 gradients` error
     # Evaluation & Logging
     'eval_strategy': 'steps',
     'eval_steps': 500,
@@ -77,23 +75,9 @@ if not os.path.exists(config_values['dataset_path']):
     print(f"Error: Dataset file not found at {config_values['dataset_path']}")
     sys.exit(1)
 
-# Check CUDA availability for fp16
-if config_values['fp16'] and not torch.cuda.is_available():
-    print(
-        'Warning: fp16 is enabled in config, but CUDA is not available. Training will proceed without fp16.'
-    )
-    config_values['fp16'] = False   # Disable fp16 if CUDA not found
 
-# Initialize Accelerator for device placement and fp16 handling
 # Determine mixed precision mode for Accelerator based on config AND support checks
-if config_values[
-    'bf16'
-]:   # bf16 takes precedence if enabled and supported (checked above)
-    precision_mode = 'bf16'
-elif config_values['fp16']:   # Check fp16 only if bf16 is not used
-    precision_mode = 'fp16'
-else:
-    precision_mode = 'no'   # Default to no mixed precision
+precision_mode = 'bf16' if config_values['bf16'] else 'no'
 
 print(f"Initializing Accelerator with mixed_precision='{precision_mode}'")
 accelerator = Accelerator(mixed_precision=precision_mode)
@@ -107,47 +91,37 @@ if tokenizer.pad_token is None:
         'Tokenizer does not have a pad token. Adding eos_token as pad_token.'
     )
     tokenizer.pad_token = tokenizer.eos_token
-# Set padding side appropriately for Causal LM if needed (though collator often handles)
-# tokenizer.padding_side = 'left' # Or 'right' depending on model/preference
 
 print(f"Loading configuration for {config_values['model_name']}...")
 model_config = AutoConfig.from_pretrained(
     config_values['model_name'],
     trust_remote_code=True,
     use_cache=False,  # Required for gradient checkpointing
-    # Ensure vocab size matches tokenizer, resize_token_embeddings will handle mismatch later
-    # vocab_size=len(tokenizer), # Usually handled by from_pretrained or resize
     pad_token_id=tokenizer.pad_token_id,  # Ensure config knows pad token id
 )
 
-# Ensure the model is configured for causal language modeling - usually automatic for AutoModelForCausalLM
-# model_config.is_decoder = True
-# model_config.add_cross_attention = False # Causal LM doesn't use cross-attention
-
 print(f"Initializing {config_values['model_name']} model from scratch...")
-# from_config without pretrained weights initializes the model with random weights
+# NOTE: from_config without pretrained weights initializes the model with random weights
 model = AutoModelForCausalLM.from_config(model_config)
 model.config.use_cache = (
     False  # Explicitly disable caching for gradient checkpointing again
 )
 
 # Apply GPT-J initialization (Optional, but can be better than default random)
-print('\nApplying GPT-J initialization...')
+# print('\nApplying GPT-J initialization...')
 
+# def gptj_init(module):
+#     if isinstance(module, (torch.nn.Linear,)):
+#         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+#         if module.bias is not None:
+#             torch.nn.init.zeros_(module.bias)
+#     elif isinstance(module, torch.nn.Embedding):
+#         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+#     elif isinstance(module, torch.nn.LayerNorm):
+#         torch.nn.init.zeros_(module.bias)
+#         torch.nn.init.ones_(module.weight)
 
-def gptj_init(module):
-    if isinstance(module, (torch.nn.Linear,)):
-        torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        if module.bias is not None:
-            torch.nn.init.zeros_(module.bias)
-    elif isinstance(module, torch.nn.Embedding):
-        torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-    elif isinstance(module, torch.nn.LayerNorm):
-        torch.nn.init.zeros_(module.bias)
-        torch.nn.init.ones_(module.weight)
-
-
-model.apply(gptj_init)
+# model.apply(gptj_init)
 
 
 # Resize token embeddings in case tokenizer vocab size differs from config (e.g., added pad token)
@@ -477,8 +451,7 @@ if (
     and config_values['eval_strategy'] != 'no'
 ):
     # Estimate total training steps
-    # This estimation might be slightly off if the last batch is smaller, but it's usually close enough
-    # Ensure train_dataset is loaded before this step
+    # This estimation might be slightly off if the last batch is smaller
     total_train_batch_size = (
         config_values['per_device_train_batch_size']
         * accelerator.num_processes
@@ -547,14 +520,11 @@ training_args = TrainingArguments(
     max_grad_norm=config_values['max_grad_norm'],
     # Other args
     dataloader_num_workers=config_values['dataloader_num_workers'],
-    fp16=config_values['fp16'],
     bf16=config_values['bf16'],
-    # fp16_opt_level=config_values.get("fp16_opt_level"), # Usually handled by Accelerator/Trainer
     seed=config_values['seed'],
     logging_first_step=True,  # Log metrics at the first step
     # Use accelerator device placement map automatically via Trainer
-    # ddp_find_unused_parameters=False, # Set if encountering DDP issues, usually not needed
-    # torch_compile=True, # Experimental: requires PyTorch 2.0+, can speed up training
+    torch_compile=True,  # Experimental: requires PyTorch 2.0+, can speed up training
 )
 
 print('Initializing Trainer...')
@@ -565,12 +535,7 @@ trainer = Trainer(
     eval_dataset=eval_dataset,  # Pass validation dataset here (can be None)
     tokenizer=tokenizer,
     data_collator=data_collator,  # Use the LM collator
-    # compute_metrics=compute_metrics, # Optional: if you want more than just loss/perplexity
-    # optimizers = (optimizer, scheduler) # Optional: provide custom optimizer/scheduler
 )
-
-# Move model to accelerator device (redundant if done before, but safe)
-# model = accelerator.prepare(model) # Trainer usually handles this with args
 
 print('Starting training...')
 try:
