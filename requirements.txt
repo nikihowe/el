@@ -1,0 +1,9 @@
+# Core ML libraries
+torch>=2.0.0
+transformers>=4.35.0
+datasets>=2.14.0
+accelerate>=0.24.0
+
+# Utility
+tqdm>=4.60.0 
+wandb>=0.19.10
