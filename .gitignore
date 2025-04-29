@@ -1,0 +1,31 @@
+# Wandb files
+wandb/
+
+# Backup files
+trained_model_backup/
+
+# Pycache
+__pycache__/
+
+# DS_Store
+.DS_Store
+
+# Virtual environment
+venv/
+
+# Datasets
+datasets/
+
+# Slurm logs
+slurm_logs/
+
+done/
+finetuning_datasets/
+processed_datasets/
+pythia-70m-arxiv-finetuned/
+pythia-70m-arxiv-scratch/
+tmp_trainer/
+tokenized_datasets/
+.cursorignore
+
+arxiv-metadata-oai-snapshot.jsonl
