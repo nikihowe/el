@@ -1,17 +1,19 @@
-import os
 import json
-import torch
+import os
 from collections import Counter
+
+import numpy as np
+import torch
 from transformers import (
-    AutoTokenizer,
     AutoModelForSequenceClassification,
+    AutoTokenizer,
+    DataCollatorWithPadding,
     Trainer,
     TrainingArguments,
-    DataCollatorWithPadding,
 )
-from datasets import load_dataset, Dataset, DatasetDict
-import numpy as np
+
 import wandb
+from datasets import Dataset, DatasetDict, load_dataset
 
 wandb.init(project='el_takehome')
 

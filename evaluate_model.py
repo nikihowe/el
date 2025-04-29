@@ -1,19 +1,21 @@
-import os
 import json
-import torch
+import os
+
 import numpy as np
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    Trainer,
-    DataCollatorWithPadding,
-)
-from datasets import load_dataset, Dataset, DatasetDict
+import torch
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
     precision_recall_fscore_support,
 )
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    DataCollatorWithPadding,
+    Trainer,
+)
+
+from datasets import Dataset, DatasetDict, load_dataset
 
 # Paths
 FINETUNE_DIR = 'pythia-70m-arxiv-finetuned'
