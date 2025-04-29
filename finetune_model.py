@@ -1,0 +1,153 @@
+import os
+import json
+import torch
+from collections import Counter
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    Trainer,
+    TrainingArguments,
+    DataCollatorWithPadding,
+)
+from datasets import load_dataset, Dataset, DatasetDict
+import numpy as np
+import wandb
+
+wandb.init(project='el_takehome')
+
+# Paths
+BASE_MODEL_DIR = 'pythia-70m-arxiv-scratch'
+FINETUNE_DIR = 'pythia-70m-arxiv-finetuned'
+DATASET_DIR = 'finetuning_datasets'
+TRAIN_FILE = os.path.join(DATASET_DIR, 'train.jsonl')
+DEV_FILE = os.path.join(DATASET_DIR, 'dev.jsonl')
+
+# 1. Load tokenizer
+print('Loading tokenizer...')
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_DIR)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+
+# 2. Load and preprocess datasets
+def load_jsonl(path):
+    with open(path) as f:
+        return [json.loads(line) for line in f]
+
+
+def get_label_list(data):
+    return sorted(list(set(ex['label'] for ex in data)))
+
+
+print('Loading datasets...')
+train_data = load_jsonl(TRAIN_FILE)
+dev_data = load_jsonl(DEV_FILE)
+labels = get_label_list(train_data + dev_data)
+label2id = {l: i for i, l in enumerate(labels)}
+id2label = {i: l for l, i in label2id.items()}
+
+# Convert to HuggingFace Dataset
+train_ds = Dataset.from_list(
+    [{'text': ex['text'], 'label': label2id[ex['label']]} for ex in train_data]
+)
+dev_ds = Dataset.from_list(
+    [{'text': ex['text'], 'label': label2id[ex['label']]} for ex in dev_data]
+)
+datasets = DatasetDict({'train': train_ds, 'validation': dev_ds})
+
+# 3. Tokenize
+def preprocess(example):
+    return tokenizer(example['text'], truncation=True, padding=False)
+
+
+datasets = datasets.map(preprocess, batched=True)
+
+# 4. Compute class weights (no sklearn)
+train_label_indices = [label2id[l] for l in [ex['label'] for ex in train_data]]
+num_classes = len(labels)
+counts = np.bincount(train_label_indices, minlength=num_classes)
+total = sum(counts)
+class_weights = [total / (num_classes * c) if c > 0 else 0.0 for c in counts]
+class_weights = torch.tensor(class_weights, dtype=torch.float)
+print(f'Class weights: {class_weights}')
+
+# 5. Load base model with new classification head
+print('Loading base model with new classification head...')
+model = AutoModelForSequenceClassification.from_pretrained(
+    BASE_MODEL_DIR,
+    num_labels=len(labels),
+    problem_type='single_label_classification',
+    ignore_mismatched_sizes=True,  # allow new head
+    id2label=id2label,
+    label2id=label2id,
+)
+
+# 6. Data collator
+data_collator = DataCollatorWithPadding(tokenizer)
+
+# 7. Metrics
+def compute_metrics(eval_pred):
+    from sklearn.metrics import accuracy_score, f1_score
+
+    logits, labels = eval_pred
+    preds = np.argmax(logits, axis=-1)
+    return {
+        'accuracy': accuracy_score(labels, preds),
+        'f1': f1_score(labels, preds, average='weighted'),
+    }
+
+
+# 8. Custom Trainer to use weighted loss
+from transformers import Trainer
+
+
+class WeightedTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        labels = inputs.get('labels')
+        outputs = model(**inputs)
+        logits = outputs.get('logits')
+        loss_fct = torch.nn.CrossEntropyLoss(
+            weight=class_weights.to(model.device)
+        )
+        loss = loss_fct(logits, labels)
+        return (loss, outputs) if return_outputs else loss
+
+
+# 9. Training arguments
+training_args = TrainingArguments(
+    output_dir=FINETUNE_DIR,
+    eval_strategy='epoch',
+    save_strategy='epoch',
+    num_train_epochs=1,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    learning_rate=2e-5,
+    weight_decay=0.01,
+    logging_dir=os.path.join(FINETUNE_DIR, 'logs'),
+    logging_steps=10,
+    load_best_model_at_end=True,
+    metric_for_best_model='f1',
+    greater_is_better=True,
+    save_total_limit=1,
+    report_to=['wandb'],
+)
+
+# 10. Trainer
+trainer = WeightedTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=datasets['train'],
+    eval_dataset=datasets['validation'],
+    tokenizer=tokenizer,
+    data_collator=data_collator,
+    compute_metrics=compute_metrics,
+)
+
+# 11. Train
+print('Starting finetuning...')
+trainer.train()
+
+# 12. Save final model
+print(f'Saving finetuned model to {FINETUNE_DIR}')
+trainer.save_model(FINETUNE_DIR)
+tokenizer.save_pretrained(FINETUNE_DIR)
+print('Done.')
