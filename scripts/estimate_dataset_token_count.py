@@ -114,9 +114,9 @@ def count_abstract_tokens(
         # Extrapolate results
         if processed_abstracts_count > 0 and bytes_processed > 0:
             # More accurate scaling factor based on actual bytes processed vs target
-            # scale_factor = file_size / bytes_processed
+            scale_factor = file_size / bytes_processed
             # Simpler scaling by percentage target
-            scale_factor = 100 / approximation_percent
+            # scale_factor = 100 / approximation_percent
             estimated_total_abstracts = int(
                 processed_abstracts_count * scale_factor
             )
@@ -177,18 +177,6 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()
-
-    # Ensure transformers and tqdm are available
-    try:
-        from transformers import GPT2TokenizerFast
-        from tqdm import tqdm
-    except ImportError as e:
-        missing_lib = str(e).split(' ')[-1].replace("'")
-        print(f"Error: '{missing_lib}' library not found.")
-        print(
-            'Please install dependencies: pip install transformers tokenizers tqdm'
-        )
-        sys.exit(1)
 
     count_abstract_tokens(
         args.json_file,
