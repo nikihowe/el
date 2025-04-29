@@ -1,21 +1,27 @@
+import math
 import os
-import torch
 import sys
-import math   # Needed for math.exp for perplexity if calculated manually
-from datasets import load_dataset, DatasetDict, load_from_disk
+
+import torch
+from accelerate import Accelerator
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
+    DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
-    DataCollatorForLanguageModeling,
-    default_data_collator,  # Can use this for eval sometimes
 )
+
 import wandb
-from accelerate import Accelerator   # Import Accelerator for device placement
+from datasets import DatasetDict, load_dataset, load_from_disk
+
+DATASET_PATH = 'datasets/arxiv-metadata-oai-snapshot.jsonl'
+LOG_TO_WANDB = False
 
 # Set cache directory to scratch
+# NOTE: This is necessary because the default HF cache writes to $HOME,
+# which has a storage cap of 100GB and will fill up.
 os.environ['HF_DATASETS_CACHE'] = os.path.join(os.getcwd(), 'hf_cache')
 os.environ[
     'TOKENIZERS_PARALLELISM'
@@ -24,47 +30,45 @@ os.environ[
 # --- Wandb Logging Setup ---
 wandb.init(project='el_takehome')
 
-# --- Hardcoded Configuration --- (MODIFY THESE VALUES)
+# --- Hardcoded Configuration ---
 config_values = {
     # Model & Tokenizer
     'model_name': 'EleutherAI/pythia-70m',
-    'block_size': 1024,  # Reduced block size for potential memory issues, adjust as needed. Pythia-70M default is 2048.
+    'block_size': 2048,
     # Data
-    'dataset_path': 'arxiv-metadata-oai-snapshot.jsonl',
+    'dataset_path': DATASET_PATH,
     'text_field': 'abstract',
     'validation_split_percentage': 5,  # Percentage of data to hold out for validation
-    'preprocessing_num_workers': 8,  # Back to original value
+    'preprocessing_num_workers': 8,  # Going too high caused memory issues
     'overwrite_cache': False,
-    'dataloader_num_workers': 4,  # Back to original value
-    'map_batch_size': 1000,  # Keep this for efficiency
+    'dataloader_num_workers': 4,  # Going too high caused memory issues
+    'map_batch_size': 1000,
     # Training
     'output_dir': './pythia-70m-arxiv-scratch',
-    'overwrite_output_dir': False,  # Be careful with this
+    'overwrite_output_dir': False,
     'num_train_epochs': 3.0,
-    'per_device_train_batch_size': 4,  # Reduced batch size, maybe increase if memory allows
-    'gradient_accumulation_steps': 8,  # Adjusted accumulation to maintain effective batch size (4*8=32)
+    'per_device_train_batch_size': 4,
+    'gradient_accumulation_steps': 8,
     'gradient_checkpointing': True,
-    'learning_rate': 1e-5,  # A more standard starting LR for LM fine-tuning/training
+    'learning_rate': 1e-5,
     'weight_decay': 0.01,
-    'warmup_ratio': 0.05,  # Use ratio instead of fixed steps for flexibility
-    # "warmup_steps": 20000, # Commented out, using warmup_ratio instead
-    'max_grad_norm': 1.0,  # More standard grad norm clipping
-    'lr_scheduler_type': 'cosine',  # Often works well
+    'warmup_ratio': 0.05,  # Warmup period for stability early on
+    'max_grad_norm': 1.0,
+    'lr_scheduler_type': 'cosine',
     'adam_beta1': 0.9,
-    'adam_beta2': 0.95,  # Slightly different beta2 sometimes helps
-    'adam_epsilon': 1e-6,
-    'fp16': False,  # Requires CUDA and appropriate libraries (apex or native torch)
+    'adam_beta2': 0.95,
+    'adam_epsilon': 1e-6,  # NOTE: raising this from 1e-8 was necessary for stability
+    'fp16': False,  # NOTE: fp16 caused `Attempting to unscale FP16 gradients` error
     'bf16': True,
-    # "fp16_opt_level": "O2",  # Often not needed with native AMP
-    'fp16_full_eval': False,  # Usually False is fine
+    'fp16_full_eval': False,
     # Evaluation & Logging
-    'eval_strategy': 'steps',  # Evaluate periodically during training
-    'eval_steps': 500,  # Evaluate every N steps (match save_steps?)
+    'eval_strategy': 'steps',
+    'eval_steps': 500,
     'save_steps': 500,
     'save_total_limit': 2,
     'logging_steps': 50,
-    'report_to': 'wandb',
-    'seed': 42,  # Add seed for reproducibility
+    'report_to': 'wandb' if LOG_TO_WANDB else 'none',
+    'seed': 42,
 }
 # --- End Hardcoded Configuration ---
 
