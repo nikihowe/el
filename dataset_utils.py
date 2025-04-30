@@ -10,8 +10,11 @@ TOKENIZED_DATA_PATH = 'datasets/pretraining/tokenized_datasets'
 # Finished processed dataset, ready for training
 PROCESSED_DATA_PATH = 'datasets/pretraining/grouped_datasets'
 
+REPORT_DROPPED_TOKENS = False
+
 
 def tokenize_function(examples, config_values, tokenizer):
+    """Tokenizes texts from a batch and returns a dictionary of tokenized texts."""
     texts = examples.get(config_values['text_field'])
     if texts is None:
         raise ValueError(
@@ -28,13 +31,7 @@ def tokenize_function(examples, config_values, tokenizer):
     # Tokenize valid texts. Padding handled later by collator.
     # Truncation might be needed if texts are very long.
     # We let group_texts handle chunking.
-    return tokenizer(
-        valid_texts,
-        truncation=True,
-        # NOTE: We do times 2 to ensure efficient packing
-        max_length=config_values['block_size'] * 2,
-        padding=False,
-    )
+    return tokenizer(valid_texts, truncation=False, padding=False)
 
 
 def group_texts(examples, block_size):
@@ -51,7 +48,7 @@ def group_texts(examples, block_size):
         length_for_chunking = (original_total_length // block_size) * block_size
         # Calculate the actual dropped amount (remainder)
         dropped_tokens = original_total_length - length_for_chunking
-        if dropped_tokens > 0:
+        if dropped_tokens > 0 and REPORT_DROPPED_TOKENS:
              print(
                  f'Dropping {dropped_tokens} remainder tokens from batch total {original_total_length}'
              )
@@ -107,7 +104,6 @@ def load_datasets(config_values, tokenizer, DEBUG):
                 tokenized_datasets = load_from_disk(TOKENIZED_DATA_PATH)
                 print("Successfully loaded cached tokenized datasets.")
 
-                # --- Improved Split Mismatch Check ---
                 loaded_splits = set(tokenized_datasets.keys())
                 if config_values['validation_split_percentage'] > 0:
                     expected_splits = {'train', 'validation'}
@@ -115,16 +111,23 @@ def load_datasets(config_values, tokenizer, DEBUG):
                     expected_splits = {'train'}
 
                 if loaded_splits != expected_splits:
-                    print(f"Warning: Loaded tokenized dataset splits {loaded_splits} "
-                          f"do not match expected splits {expected_splits} based on current "
-                          f"validation_split_percentage ({config_values['validation_split_percentage']}%).")
-                    if not config_values['overwrite_cache']:
-                        print("Invalidating loaded tokenized cache and forcing re-processing. "
-                              "Set overwrite_cache=True to suppress this.")
-                        tokenized_datasets = None # Invalidate loaded data
-                    # If overwrite_cache is True, we proceed with the loaded data,
-                    # as it will be overwritten later anyway.
-                # --- End Split Mismatch Check ---
+                    print("\n" + "="*60)
+                    print("  Warning: Dataset Split Mismatch Detected!")
+                    print("="*60)
+                    print(f"  Current Configuration ('validation_split_percentage': {config_values['validation_split_percentage']}%):")
+                    print(f"    Expected splits: {sorted(list(expected_splits))}")
+                    print(f"\n  Cached Tokenized Data ('{TOKENIZED_DATA_PATH}'):")
+                    print(f"    Actual splits found: {sorted(list(loaded_splits))}")
+                    print("\n  Reason: 'validation_split_percentage' might have changed since the cache was created.")
+                    print("  Action: Invalidating loaded tokenized cache due to split mismatch and forcing re-processing.")
+                    print("          To proceed with cached splits despite mismatch, comment out this check.")
+                    print("          To avoid this, delete the cache folder:")
+                    print(f"          rm -rf {TOKENIZED_DATA_PATH}")
+                    print("          or set 'overwrite_cache=True' in your config and re-run.")
+                    print("="*60 + "\n")
+
+                    # Action: Invalidate loaded cache (since overwrite_cache is False here)
+                    tokenized_datasets = None # Invalidate cache
 
             else:
                 print("'overwrite_cache' is True, skipping load of tokenized data.")
@@ -196,6 +199,7 @@ def load_datasets(config_values, tokenizer, DEBUG):
                 batched=True,
                 batch_size=config_values['map_batch_size'],
                 num_proc=config_values['preprocessing_num_workers'],
+                remove_columns=next(iter(split_dataset.values())).column_names,
                 load_from_cache_file=False,  # Cache handled by checking TOKENIZED_DATA_PATH
                 desc='Running tokenizer on dataset splits',
                 writer_batch_size=config_values['map_batch_size'],
@@ -221,12 +225,6 @@ def load_datasets(config_values, tokenizer, DEBUG):
                 load_from_cache_file=False,  # Cache handled by checking PROCESSED_DATA_PATH
                 desc=f'Grouping texts into chunks of {block_size}',
                 writer_batch_size=config_values['map_batch_size'],
-                # Keep only columns returned by group_texts (input_ids)
-                remove_columns=[
-                    col
-                    for col in tokenized_datasets['train'].column_names
-                    if col != 'input_ids'
-                ],
             )
 
             # Filter out empty examples potentially created by group_texts
