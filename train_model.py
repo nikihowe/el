@@ -18,6 +18,7 @@ from debug_utils import test_forward_pass
 
 LOG_TO_WANDB = False
 DEBUG = True
+MODEL_SAVE_DIR = './models/pythia-70m-arxiv-scratch'
 
 # Set cache directory to `scratch` partition
 # NOTE: This is necessary because the default HF cache writes to $HOME,
@@ -41,7 +42,7 @@ config_values = {
     'dataloader_num_workers': 4,  # Going too high caused memory issues
     'map_batch_size': 1000,
     # Training
-    'output_dir': './pythia-70m-arxiv-scratch',
+    'output_dir': MODEL_SAVE_DIR,
     'overwrite_output_dir': False,
     'num_train_epochs': 3.0,
     'per_device_train_batch_size': 4,
