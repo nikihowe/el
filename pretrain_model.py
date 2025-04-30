@@ -17,7 +17,7 @@ from dataset_utils import load_datasets
 from debug_utils import test_forward_pass
 from constants import BASE_MODEL_DIR as MODEL_SAVE_DIR
 
-LOG_TO_WANDB = False
+LOG_TO_WANDB = True
 DEBUG = True
 
 # Set cache directory to `scratch` partition
