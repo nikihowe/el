@@ -9,26 +9,35 @@ from transformers import (
     DataCollatorWithPadding,
     Trainer,
     TrainingArguments,
+    AutoConfig,
 )
 
 import wandb
 from datasets import Dataset, DatasetDict
 
 from constants import BASE_MODEL_DIR, FINETUNED_MODEL_DIR, FINETUNED_DATA_PATH
+from dataset_utils import check_token_lengths
 
 LOG_TO_WANDB = True
 if LOG_TO_WANDB:
     wandb.init(project='el_takehome')
 
+SAVE_FINAL_MODEL = True
+
 # Paths
 TRAIN_FILE = os.path.join(FINETUNED_DATA_PATH, 'train.jsonl')
 DEV_FILE = os.path.join(FINETUNED_DATA_PATH, 'dev.jsonl')
 
-# 1. Load tokenizer
-print('Loading tokenizer...')
+# 1. Load tokenizer and config
+print('Loading tokenizer and config...')
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_DIR)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
+
+# Get model's maximum block size from config
+config = AutoConfig.from_pretrained(BASE_MODEL_DIR)
+block_size = config.max_position_embeddings
+print(f'Model maximum block size: {block_size}')
 
 # 2. Load and preprocess datasets
 def load_jsonl(path):
@@ -39,12 +48,19 @@ def load_jsonl(path):
 def get_label_list(data):
     return sorted(list(set(ex['label'] for ex in data)))
 
+
 print('Loading datasets...')
 train_data = load_jsonl(TRAIN_FILE)
 dev_data = load_jsonl(DEV_FILE)
 labels = get_label_list(train_data + dev_data)
 label2id = {l: i for i, l in enumerate(labels)}
 id2label = {i: l for l, i in label2id.items()}
+
+# Check token lengths before preprocessing
+train_texts = [ex['text'] for ex in train_data]
+dev_texts = [ex['text'] for ex in dev_data]
+check_token_lengths(train_texts, tokenizer, block_size, 'training set')
+check_token_lengths(dev_texts, tokenizer, block_size, 'dev set')
 
 # Convert to HuggingFace Dataset
 train_ds = Dataset.from_list(
@@ -57,7 +73,10 @@ datasets = DatasetDict({'train': train_ds, 'validation': dev_ds})
 
 # 3. Tokenize
 def preprocess(example):
-    return tokenizer(example['text'], truncation=True, padding=False)
+    return tokenizer(
+        example['text'], truncation=True, padding=False, max_length=block_size
+    )
+
 
 datasets = datasets.map(preprocess, batched=True)
 
@@ -95,6 +114,7 @@ def compute_metrics(eval_pred):
         'f1': f1_score(labels, preds, average='weighted'),
     }
 
+
 # 8. Custom Trainer to use weighted loss
 class WeightedTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
@@ -106,6 +126,7 @@ class WeightedTrainer(Trainer):
         )
         loss = loss_fct(logits, labels)
         return (loss, outputs) if return_outputs else loss
+
 
 # 9. Training arguments
 training_args = TrainingArguments(
@@ -144,9 +165,10 @@ print('Starting finetuning...')
 trainer.train()
 
 # 12. Save final model
-print(f'Saving finetuned model to {FINETUNED_MODEL_DIR}')
-trainer.save_model(FINETUNED_MODEL_DIR)
-tokenizer.save_pretrained(FINETUNED_MODEL_DIR)
+if SAVE_FINAL_MODEL:
+    print(f'Saving finetuned model to {FINETUNED_MODEL_DIR}')
+    trainer.save_model(FINETUNED_MODEL_DIR)
+    tokenizer.save_pretrained(FINETUNED_MODEL_DIR)
 print('Done.')
 
 if LOG_TO_WANDB:
