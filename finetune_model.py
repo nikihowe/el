@@ -11,6 +11,7 @@ from transformers import (
     TrainingArguments,
     AutoConfig,
 )
+from sklearn.metrics import accuracy_score, f1_score
 
 import wandb
 from datasets import Dataset, DatasetDict
@@ -105,7 +106,6 @@ data_collator = DataCollatorWithPadding(tokenizer)
 
 # 7. Metrics
 def compute_metrics(eval_pred):
-    from sklearn.metrics import accuracy_score, f1_score
 
     logits, labels = eval_pred
     preds = np.argmax(logits, axis=-1)

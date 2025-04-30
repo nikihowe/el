@@ -3,6 +3,7 @@ torch>=2.0.0
 transformers>=4.35.0
 datasets>=2.14.0
 accelerate>=0.24.0
+scikit-learn>=1.6.1
 
 # Utility
 tqdm>=4.60.0 
