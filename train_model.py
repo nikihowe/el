@@ -16,8 +16,16 @@ from transformers import (
 import wandb
 from datasets import DatasetDict, load_dataset, load_from_disk
 
-DATASET_PATH = 'datasets/arxiv-metadata-oai-snapshot.jsonl'
+from debug_utils import test_forward_pass
+
+# Original dataset
+DATA_PATH = 'datasets/pretraining/arxiv-metadata-oai-snapshot.jsonl'
+# Tokenized but not grouped
+TOKENIZED_DATA_PATH = 'datasets/pretraining/tokenized_datasets'
+# Finished processed dataset, ready for training
+PROCESSED_DATA_PATH = 'datasets/pretraining/grouped_datasets'
 LOG_TO_WANDB = False
+DEBUG = True
 
 # Set cache directory to `scratch` partition
 # NOTE: This is necessary because the default HF cache writes to $HOME,
@@ -35,7 +43,7 @@ config_values = {
     'model_name': 'EleutherAI/pythia-70m',
     'block_size': 2048,
     # Data
-    'dataset_path': DATASET_PATH,
+    'dataset_path': DATA_PATH,
     'text_field': 'abstract',
     'validation_split_percentage': 5,  # Percentage of data to hold out for validation
     'preprocessing_num_workers': 8,  # Going too high caused memory issues
@@ -101,73 +109,12 @@ model = AutoModelForCausalLM.from_config(model_config)
 model.resize_token_embeddings(len(tokenizer))
 print(f'Resized model token embeddings to: {len(tokenizer)}')
 
-# --- Test a single forward pass (Optional but recommended) ---
-print('\nTesting single forward pass...')
+# --- Test a single forward pass using the utility function ---
 # Move model to the correct device *before* testing
-model = model.to(accelerator.device)   # Use accelerator's device
-print(f'Model device: {next(model.parameters()).device}')
-
-test_input_text = 'This is a test.'
-test_input = tokenizer(test_input_text, return_tensors='pt')
-print(f"Input device before moving: {test_input['input_ids'].device}")
-# Move input to the correct device
-test_input = {k: v.to(accelerator.device) for k, v in test_input.items()}
-print(f"Input device after moving: {test_input['input_ids'].device}")
-
-# Add labels for loss calculation (shifted input_ids)
-test_input['labels'] = test_input[
-    'input_ids'
-].clone()   # For Causal LM, labels are usually shifted input_ids
-print(f'Test input keys: {test_input.keys()}')
-print(f"Test input shape: {test_input['input_ids'].shape}")
-print(f"Test labels shape: {test_input['labels'].shape}")
-
-
-model.eval()   # Set model to evaluation mode for the test pass
-with torch.no_grad():
-    try:
-        outputs = model(**test_input)
-        print(f'Outputs type: {type(outputs)}')
-        # print(f"Outputs attributes: {dir(outputs)}") # Can be verbose
-        if hasattr(outputs, 'loss') and outputs.loss is not None:
-            print(f'Test forward pass loss: {outputs.loss.item():.6f}')
-        else:
-            print('Loss attribute not found or is None in outputs.')
-            # Try to compute loss manually if needed for debugging
-            if hasattr(outputs, 'logits'):
-                logits = outputs.logits
-                # Shift so that tokens < n predict n
-                shift_logits = logits[..., :-1, :].contiguous()
-                shift_labels = test_input['labels'][..., 1:].contiguous()
-                # Flatten the tokens
-                loss_fct = torch.nn.CrossEntropyLoss()
-                shift_logits_flat = shift_logits.view(
-                    -1, shift_logits.size(-1)
-                )
-                shift_labels_flat = shift_labels.view(-1)
-                # Ensure labels are in the valid range [0, vocab_size-1] and not -100
-                active_loss = (
-                    shift_labels_flat != -100
-                )   # Should not be -100 here as we didn't use collator
-                if active_loss.any():
-                    loss = loss_fct(
-                        shift_logits_flat[active_loss],
-                        shift_labels_flat[active_loss],
-                    )
-                    print(f'Manually computed loss: {loss.item():.6f}')
-                else:
-                    print(
-                        'No active labels for manual loss calculation (all labels might be padding).'
-                    )
-
-            else:
-                print('No logits found in outputs either.')
-    except Exception as e:
-        print(f'Error during test forward pass: {e}')
-        import traceback
-
-        traceback.print_exc()
-model.train()   # Set model back to training mode
+model = model.to(accelerator.device) 
+# Call the testing function
+if DEBUG:
+    test_forward_pass(model, tokenizer, accelerator)
 
 # --- Tokenization Function ---
 def tokenize_function(examples):
@@ -184,101 +131,49 @@ def tokenize_function(examples):
         print(
             f"Warning: Skipped {len(texts) - len(valid_texts)} non-string, empty or None entries in field '{config_values['text_field']}'."
         )
-    # Tokenize valid texts. Padding handled later by collator. Truncation might be needed if texts are very long.
-    # return tokenizer(valid_texts, truncation=False) # Let group_texts handle chunking
-    # Or, if individual abstracts can exceed block_size significantly *before* concatenation:
+    # Tokenize valid texts. Padding handled later by collator.
+    # Truncation might be needed if texts are very long.
+    # We let group_texts handle chunking.
     return tokenizer(
         valid_texts,
         truncation=True,
+        # NOTE: We do times 2 to ensure efficient packing
         max_length=config_values['block_size'] * 2,
         padding=False,
     )   # Added truncation safeguard
 
-
-# --- Block Processing Function ---
 block_size = config_values['block_size']
 
-
 def group_texts(examples):
-    # Concatenate all texts
+    """Concatenates texts from a batch and chunks them into blocks of fixed size."""
     concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
     total_length = len(concatenated_examples[list(examples.keys())[0]])
-    # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
-    # customize this part to your needs.
+
+    # We drop the small remainder.
     if total_length >= block_size:
         total_length = (total_length // block_size) * block_size
-    else:
-        # Handle cases where total concatenated length is less than block size
-        # Option 1: Skip this batch (return empty dict)
-        # return {}
-        # Option 2: Pad (requires collator to handle padding correctly)
-        # Keep as is for now, Trainer might handle small final batch if not dropped
-        pass
+        print(f"Dropping {total_length - block_size} tokens out of {total_length} total tokens")
 
     # Split by chunks of block_size
     result = {
         k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
         for k, t in concatenated_examples.items()
     }
-    # ***** THE FIX: DO NOT CREATE LABELS HERE *****
-    # Let the DataCollatorForLanguageModeling handle label creation (shifting)
-    # result["labels"] = result["input_ids"].copy() # <- REMOVED THIS LINE
+
     return result
 
-# --- End Block Processing Function ---
-
-# Basic check for dataset file existence
-if not os.path.exists(config_values['dataset_path']):
-    print(f"Error: Dataset file not found at {config_values['dataset_path']}")
-    sys.exit(1)
-
-print(f"Loading dataset: {config_values['dataset_path']}...")
-# Load the JSONL dataset (expecting a 'train' split by default)
-# Consider streaming if dataset is huge: streaming=True
-try:
-    raw_dataset = load_dataset(
-        'json', data_files=config_values['dataset_path'], split='train'
-    )   # Explicitly request train split
-    raw_datasets = DatasetDict(
-        {'train': raw_dataset}
-    )   # Put it in a DatasetDict
-except Exception as e:
-    print(f'Error loading dataset: {e}')
-    print(
-        "Please ensure the jsonl file is correctly formatted and contains a 'train' structure or adjust split name."
-    )
-    sys.exit(1)
-
-
-# Inspect raw data
-print('\nInspecting raw data examples:')
-num_examples_to_show = min(3, len(raw_datasets['train']))
-for i in range(num_examples_to_show):
-    example = raw_datasets['train'][i]
-    abstract = example.get(
-        config_values['text_field'], 'N/A'
-    )   # Safely get abstract
-    print(f'\nExample {i}:')
-    print(f'Abstract: {abstract[:200]}...')  # First 200 chars
-    print(f'Length: {len(abstract)}')
-
 # Try to load saved processed datasets
-processed_path = 'processed_datasets'
-tokenized_path = 'tokenized_datasets'   # Added path for tokenized cache
 try:
     print(
-        f'\nAttempting to load saved processed datasets from {processed_path}...'
+        f'\nAttempting to load saved grouped datasets from {PROCESSED_DATA_PATH}...'
     )
-    if os.path.exists(processed_path):
-        lm_datasets = load_from_disk(processed_path)
-        print('Successfully loaded saved processed datasets!')
+    if os.path.exists(PROCESSED_DATA_PATH):
+        lm_datasets = load_from_disk(PROCESSED_DATA_PATH)
+        print('Successfully loaded saved grouped datasets!')
 
         # Verify expected columns are present
         if 'input_ids' not in lm_datasets['train'].column_names:
             raise ValueError("Loaded dataset missing 'input_ids' column.")
-        # DO NOT expect 'labels' here anymore after the fix
-        # if "labels" not in lm_datasets["train"].column_names:
-        #      raise ValueError("Loaded dataset missing 'labels' column.")
 
         print('\nInspecting processed data examples:')
         num_processed_to_show = min(3, len(lm_datasets['train']))
@@ -289,47 +184,23 @@ try:
             print(
                 f"First 50 tokens: {tokenizer.decode(example['input_ids'][:50])}"
             )
-            # print(f"Labels length: {len(example['labels'])}") # Labels no longer present here
-            # print(f"First 50 labels: {tokenizer.decode(example['labels'][:50])}")
     else:
-        raise FileNotFoundError(f"Directory '{processed_path}' not found")
+        raise FileNotFoundError(f"Directory '{PROCESSED_DATA_PATH}' not found")
 
 except Exception as e:
     print(
-        f'Could not load saved processed datasets: {e}. Processing from scratch...'
+        f'Could not load saved grouped datasets: {e}. Processing from scratch...'
     )
 
-    # Split the dataset into training and validation
-    if config_values['validation_split_percentage'] > 0:
-        split_dataset = raw_datasets['train'].train_test_split(
-            test_size=config_values['validation_split_percentage'] / 100.0,
-            seed=config_values['seed'],  # Use seed for reproducibility
-        )
-        # Rename 'test' split to 'validation' for clarity
-        split_dataset['validation'] = split_dataset.pop('test')
-        print(
-            f"Split dataset into {100-config_values['validation_split_percentage']}% train and {config_values['validation_split_percentage']}% validation."
-        )
-    else:
-        print(
-            'Validation split percentage is 0. Using the entire dataset for training.'
-        )
-        split_dataset = DatasetDict({'train': raw_datasets['train']})
-        config_values[
-            'eval_strategy'
-        ] = 'no'   # Disable eval if no validation set
-        print('Evaluation disabled as no validation split was created.')
-
-    print('Applying tokenization...')
     # Try loading tokenized cache first
     try:
         if not config_values['overwrite_cache'] and os.path.exists(
-            tokenized_path
+            TOKENIZED_DATA_PATH
         ):
             print(
-                f'Attempting to load tokenized datasets from {tokenized_path}...'
+                f'Attempting to load tokenized datasets from {TOKENIZED_DATA_PATH}...'
             )
-            tokenized_datasets = load_from_disk(tokenized_path)
+            tokenized_datasets = load_from_disk(TOKENIZED_DATA_PATH)
             # Verify splits match
             if set(tokenized_datasets.keys()) != set(split_dataset.keys()):
                 raise ValueError(
@@ -341,7 +212,64 @@ except Exception as e:
                 'Tokenized cache not found or overwrite requested.'
             )
     except Exception as te:
-        print(f'Could not load tokenized cache: {te}. Tokenizing...')
+        print(f'Could not load tokenized cache: {te}. Tokenizing from scratch...')
+
+        # --- Load Raw Data Only If Caches Missed ---
+        print(f"Loading raw dataset: {config_values['dataset_path']}...")
+        # Basic check for dataset file existence
+        if not os.path.exists(config_values['dataset_path']):
+            print(f"Error: Dataset file not found at {config_values['dataset_path']}")
+            sys.exit(1)
+        try:
+            raw_dataset = load_dataset(
+                'json', data_files=config_values['dataset_path'], split='train'
+            )
+            raw_datasets = DatasetDict(
+                {'train': raw_dataset}
+            )
+        except Exception as load_e:
+            print(f'Error loading dataset: {load_e}')
+            print(
+                "Please ensure the jsonl file is correctly formatted and contains a 'train' structure or adjust split name."
+            )
+            sys.exit(1)
+
+        # Inspect raw data (Optional, only if debugging)
+        if DEBUG:
+            print('\nInspecting raw data examples:')
+            num_examples_to_show = min(3, len(raw_datasets['train']))
+            for i in range(num_examples_to_show):
+                example = raw_datasets['train'][i]
+                abstract = example.get(
+                    config_values['text_field'], 'N/A'
+                )
+                print(f'\nExample {i}:')
+                print(f'Abstract: {abstract[:200]}...')
+                print(f'Length: {len(abstract)}')
+
+        # Split the raw dataset into training and validation
+        if config_values['validation_split_percentage'] > 0:
+            split_dataset = raw_datasets['train'].train_test_split(
+                test_size=config_values['validation_split_percentage'] / 100.0,
+                seed=config_values['seed'],
+            )
+            # Rename 'test' split to 'validation' for clarity
+            split_dataset['validation'] = split_dataset.pop('test')
+            print(
+                f"Split dataset into {100-config_values['validation_split_percentage']}% train and {config_values['validation_split_percentage']}% validation."
+            )
+        else:
+            print(
+                'Validation split percentage is 0. Using the entire dataset for training.'
+            )
+            split_dataset = DatasetDict({'train': raw_datasets['train']})
+            config_values[
+                'eval_strategy'
+            ] = 'no'
+            print('Evaluation disabled as no validation split was created.')
+        # --- End Raw Data Loading ---
+
+        print('Applying tokenization...')
         tokenized_datasets = split_dataset.map(
             tokenize_function,
             batched=True,
@@ -354,41 +282,40 @@ except Exception as e:
             desc='Running tokenizer on dataset splits',
             writer_batch_size=config_values['map_batch_size'],
         )
-        print(f'Saving tokenized datasets to {tokenized_path}...')
-        tokenized_datasets.save_to_disk(tokenized_path)
+        print(f'Saving tokenized datasets to {TOKENIZED_DATA_PATH}...')
+        tokenized_datasets.save_to_disk(TOKENIZED_DATA_PATH)
 
-    print(f'Grouping texts into blocks of size {block_size}...')
-    # Note: group_texts removes remaining columns ('attention_mask' potentially)
-    # The collator will recreate attention_mask if needed based on padding
-    lm_datasets = tokenized_datasets.map(
-        group_texts,
-        batched=True,
-        batch_size=config_values[
-            'map_batch_size'
-        ],  # Process N tokenized entries to form blocks
-        num_proc=config_values['preprocessing_num_workers'],
-        load_from_cache_file=not config_values['overwrite_cache'],
-        desc=f'Grouping texts into chunks of {block_size}',
-        writer_batch_size=config_values[
-            'map_batch_size'
-        ],  # Control writing frequency
-        # remove_columns=tokenized_datasets["train"].column_names # Keep only the columns returned by group_texts (input_ids)
-    )
-
-    # Filter out empty examples potentially created by group_texts if total length < block_size
-    for split in lm_datasets:
-        initial_count = len(lm_datasets[split])
-        lm_datasets[split] = lm_datasets[split].filter(
-            lambda example: len(example['input_ids']) > 0
+        print(f'Grouping texts into blocks of size {block_size}...')
+        # Note: group_texts removes remaining columns ('attention_mask' potentially)
+        # The collator will recreate attention_mask if needed based on padding
+        lm_datasets = tokenized_datasets.map(
+            group_texts,
+            batched=True,
+            batch_size=config_values[
+                'map_batch_size'
+            ],  # Process N tokenized entries to form blocks
+            num_proc=config_values['preprocessing_num_workers'],
+            load_from_cache_file=not config_values['overwrite_cache'],
+            desc=f'Grouping texts into chunks of {block_size}',
+            writer_batch_size=config_values[
+                'map_batch_size'
+            ],  # Control writing frequency
         )
-        filtered_count = len(lm_datasets[split])
-        if initial_count != filtered_count:
-            print(
-                f"Filtered {initial_count - filtered_count} empty examples from '{split}' split."
-            )
 
-    print(f'Saving processed datasets to {processed_path}...')
-    lm_datasets.save_to_disk(processed_path)
+        # Filter out empty examples potentially created by group_texts if total length < block_size
+        for split in lm_datasets:
+            initial_count = len(lm_datasets[split])
+            lm_datasets[split] = lm_datasets[split].filter(
+                lambda example: len(example['input_ids']) > 0
+            )
+            filtered_count = len(lm_datasets[split])
+            if initial_count != filtered_count:
+                print(
+                    f"Filtered {initial_count - filtered_count} empty examples from '{split}' split."
+                )
+
+        print(f'Saving grouped datasets to {PROCESSED_DATA_PATH}...')
+        lm_datasets.save_to_disk(PROCESSED_DATA_PATH)
 
 # Assign train and validation datasets
 if 'train' not in lm_datasets or len(lm_datasets['train']) == 0:
@@ -571,10 +498,6 @@ except Exception as train_error:
     import traceback
 
     traceback.print_exc()
-    # Optionally save state even on error
-    # print("Attempting to save state on error...")
-    # trainer.save_model(os.path.join(config_values["output_dir"], "error_checkpoint"))
-    # trainer.save_state()
 
 finally:
     # Ensure wandb run finishes
