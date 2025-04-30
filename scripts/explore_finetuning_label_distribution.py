@@ -2,22 +2,8 @@ import json
 import os
 from collections import Counter, defaultdict
 
-DATASET_DIR = 'finetuning_datasets'
-FILES = ['train.jsonl', 'dev.jsonl', 'test_no_labels.jsonl']
-
-
-def detect_label_key(sample):
-    """Try to guess the label key from a sample dict."""
-    for key in sample:
-        if key.lower() == 'label':
-            return key
-    # fallback: look for a string value that isn't 'text' or 'meta'
-    for key in sample:
-        if key.lower() not in {'text', 'meta'} and isinstance(
-            sample[key], str
-        ):
-            return key
-    return None
+DATASET_DIR = './datasets/finetuning'
+FILES = ['train.jsonl', 'dev.jsonl']
 
 
 def label_distribution(filepath):
@@ -27,7 +13,7 @@ def label_distribution(filepath):
             print(f'{filepath}: File is empty.')
             return None, None
         sample = json.loads(first)
-        label_key = detect_label_key(sample)
+        label_key = 'label'
         if not label_key:
             print(f'{filepath}: No label key found.')
             return None, None
