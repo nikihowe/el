@@ -14,18 +14,15 @@ from transformers import (
 import wandb
 from datasets import Dataset, DatasetDict
 
-from train_model import MODEL_SAVE_DIR
+from constants import BASE_MODEL_DIR, FINETUNED_MODEL_DIR, FINETUNED_DATA_PATH
 
 LOG_TO_WANDB = False
 if LOG_TO_WANDB:
     wandb.init(project='el_takehome')
 
 # Paths
-BASE_MODEL_DIR = MODEL_SAVE_DIR
-FINETUNE_DIR = './models/pythia-70m-arxiv-finetuned'
-DATASET_DIR = 'finetuning'
-TRAIN_FILE = os.path.join(DATASET_DIR, 'train.jsonl')
-DEV_FILE = os.path.join(DATASET_DIR, 'dev.jsonl')
+TRAIN_FILE = os.path.join(FINETUNED_DATA_PATH, 'train.jsonl')
+DEV_FILE = os.path.join(FINETUNED_DATA_PATH, 'dev.jsonl')
 
 # 1. Load tokenizer
 print('Loading tokenizer...')
@@ -112,7 +109,7 @@ class WeightedTrainer(Trainer):
 
 # 9. Training arguments
 training_args = TrainingArguments(
-    output_dir=FINETUNE_DIR,
+    output_dir=FINETUNED_MODEL_DIR,
     eval_strategy='epoch',
     save_strategy='epoch',
     num_train_epochs=1,
@@ -120,7 +117,7 @@ training_args = TrainingArguments(
     per_device_eval_batch_size=8,
     learning_rate=2e-5,
     weight_decay=0.01,
-    logging_dir=os.path.join(FINETUNE_DIR, 'logs'),
+    logging_dir=os.path.join(FINETUNED_MODEL_DIR, 'logs'),
     logging_steps=10,
     load_best_model_at_end=True,
     metric_for_best_model='f1',
@@ -145,9 +142,9 @@ print('Starting finetuning...')
 trainer.train()
 
 # 12. Save final model
-print(f'Saving finetuned model to {FINETUNE_DIR}')
-trainer.save_model(FINETUNE_DIR)
-tokenizer.save_pretrained(FINETUNE_DIR)
+print(f'Saving finetuned model to {FINETUNED_MODEL_DIR}')
+trainer.save_model(FINETUNED_MODEL_DIR)
+tokenizer.save_pretrained(FINETUNED_MODEL_DIR)
 print('Done.')
 
 if LOG_TO_WANDB:

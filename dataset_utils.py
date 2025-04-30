@@ -3,14 +3,8 @@ import sys
 
 from datasets import DatasetDict, load_dataset, load_from_disk
 
-# NOTE: run from project dir for correct relative paths
+from constants import DATA_PATH, TOKENIZED_DATA_PATH, PROCESSED_DATA_PATH
 
-# Original dataset
-DATA_PATH = './datasets/pretraining/arxiv-metadata-oai-snapshot.jsonl'
-# Tokenized but not grouped
-TOKENIZED_DATA_PATH = './datasets/pretraining/tokenized_datasets'
-# Finished processed dataset, ready for training
-PROCESSED_DATA_PATH = './datasets/pretraining/grouped_datasets'
 
 REPORT_DROPPED_TOKENS = False
 
