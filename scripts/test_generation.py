@@ -74,4 +74,4 @@ def generate_samples(model_path, num_samples=3, max_length=100):
 
 
 if __name__ == '__main__':
-    generate_samples('./models/pythia-70m-arxiv-finetuned')
+    generate_samples('./models/pythia-70m-arxiv-scratch')
