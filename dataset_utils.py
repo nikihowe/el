@@ -115,15 +115,15 @@ def load_datasets(config_values, tokenizer, DEBUG):
 
     # 3. If tokenized failed, load and split raw data
     if tokenized_datasets is None and lm_datasets is None:
-        print(f"Loading raw dataset: {config_values['dataset_path']}...")
-        if not os.path.exists(config_values['dataset_path']):
+        print(f"Loading raw dataset: {DATA_PATH}...")
+        if not os.path.exists(DATA_PATH):
             print(
-                f"Error: Raw dataset file not found at {config_values['dataset_path']}"
+                f"Error: Raw dataset file not found at {DATA_PATH}"
             )
             sys.exit(1)
         try:
             raw_dataset = load_dataset(
-                'json', data_files=config_values['dataset_path'], split='train'
+                'json', data_files=DATA_PATH, split='train'
             )
             raw_datasets = DatasetDict({'train': raw_dataset})
 
@@ -179,6 +179,8 @@ def load_datasets(config_values, tokenizer, DEBUG):
                 desc='Running tokenizer on dataset splits',
                 writer_batch_size=config_values['map_batch_size'],
             )
+            save_dir = os.path.dirname(TOKENIZED_DATA_PATH)
+            os.makedirs(save_dir, exist_ok=True)
             print(f'Saving tokenized datasets to {TOKENIZED_DATA_PATH}...')
             tokenized_datasets.save_to_disk(TOKENIZED_DATA_PATH)
         except Exception as tokenize_e:
@@ -226,7 +228,8 @@ def load_datasets(config_values, tokenizer, DEBUG):
                     print(
                         f"Filtered {initial_count - filtered_count} empty examples from '{split}' split."
                     )
-
+            save_dir = os.path.dirname(PROCESSED_DATA_PATH)
+            os.makedirs(save_dir, exist_ok=True)
             print(f'Saving grouped datasets to {PROCESSED_DATA_PATH}...')
             lm_datasets.save_to_disk(PROCESSED_DATA_PATH)
         except Exception as group_e:
