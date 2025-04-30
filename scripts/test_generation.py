@@ -1,8 +1,6 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from constants import FINETUNED_MODEL_DIR
-
 
 def generate_samples(model_path, num_samples=3, max_length=100):
     """Loads the model and tokenizer, then generates text samples."""
@@ -76,4 +74,4 @@ def generate_samples(model_path, num_samples=3, max_length=100):
 
 
 if __name__ == '__main__':
-    generate_samples(FINETUNED_MODEL_DIR)
+    generate_samples('./models/pythia-70m-arxiv-finetuned')
