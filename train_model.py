@@ -19,13 +19,12 @@ from datasets import DatasetDict, load_dataset, load_from_disk
 DATASET_PATH = 'datasets/arxiv-metadata-oai-snapshot.jsonl'
 LOG_TO_WANDB = False
 
-# Set cache directory to scratch
+# Set cache directory to `scratch` partition
 # NOTE: This is necessary because the default HF cache writes to $HOME,
 # which has a storage cap of 100GB and will fill up.
 os.environ['HF_DATASETS_CACHE'] = os.path.join(os.getcwd(), 'hf_cache')
-os.environ[
-    'TOKENIZERS_PARALLELISM'
-] = 'false'   # Often helps avoid deadlocks with num_workers > 0
+# Avoids a warning about avoiding deadlocks with num_workers > 0
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 # --- Wandb Logging Setup ---
 wandb.init(project='el_takehome')
@@ -70,13 +69,8 @@ config_values = {
 }
 # --- End Hardcoded Configuration ---
 
-# Basic check for dataset file existence
-if not os.path.exists(config_values['dataset_path']):
-    print(f"Error: Dataset file not found at {config_values['dataset_path']}")
-    sys.exit(1)
-
-
-# Determine mixed precision mode for Accelerator based on config AND support checks
+# Possibly use `bf16` mixed precision for training
+# NOTE: tried `fp16` but got `Attempting to unscale FP16 gradients` error
 precision_mode = 'bf16' if config_values['bf16'] else 'no'
 
 print(f"Initializing Accelerator with mixed_precision='{precision_mode}'")
@@ -84,7 +78,7 @@ accelerator = Accelerator(mixed_precision=precision_mode)
 print(f'Using device: {accelerator.device}')
 
 print('Loading tokenizer...')
-# Explicitly add pad token if missing - common for GPT-like models
+# Explicitly add pad token if missing
 tokenizer = AutoTokenizer.from_pretrained(config_values['model_name'])
 if tokenizer.pad_token is None:
     print(
@@ -95,7 +89,6 @@ if tokenizer.pad_token is None:
 print(f"Loading configuration for {config_values['model_name']}...")
 model_config = AutoConfig.from_pretrained(
     config_values['model_name'],
-    trust_remote_code=True,
     use_cache=False,  # Required for gradient checkpointing
     pad_token_id=tokenizer.pad_token_id,  # Ensure config knows pad token id
 )
@@ -103,26 +96,6 @@ model_config = AutoConfig.from_pretrained(
 print(f"Initializing {config_values['model_name']} model from scratch...")
 # NOTE: from_config without pretrained weights initializes the model with random weights
 model = AutoModelForCausalLM.from_config(model_config)
-model.config.use_cache = (
-    False  # Explicitly disable caching for gradient checkpointing again
-)
-
-# Apply GPT-J initialization (Optional, but can be better than default random)
-# print('\nApplying GPT-J initialization...')
-
-# def gptj_init(module):
-#     if isinstance(module, (torch.nn.Linear,)):
-#         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-#         if module.bias is not None:
-#             torch.nn.init.zeros_(module.bias)
-#     elif isinstance(module, torch.nn.Embedding):
-#         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-#     elif isinstance(module, torch.nn.LayerNorm):
-#         torch.nn.init.zeros_(module.bias)
-#         torch.nn.init.ones_(module.weight)
-
-# model.apply(gptj_init)
-
 
 # Resize token embeddings in case tokenizer vocab size differs from config (e.g., added pad token)
 model.resize_token_embeddings(len(tokenizer))
@@ -252,9 +225,12 @@ def group_texts(examples):
     # result["labels"] = result["input_ids"].copy() # <- REMOVED THIS LINE
     return result
 
-
 # --- End Block Processing Function ---
 
+# Basic check for dataset file existence
+if not os.path.exists(config_values['dataset_path']):
+    print(f"Error: Dataset file not found at {config_values['dataset_path']}")
+    sys.exit(1)
 
 print(f"Loading dataset: {config_values['dataset_path']}...")
 # Load the JSONL dataset (expecting a 'train' split by default)
