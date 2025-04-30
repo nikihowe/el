@@ -1,6 +1,5 @@
 import json
 import os
-from collections import Counter
 
 import numpy as np
 import torch
@@ -13,14 +12,18 @@ from transformers import (
 )
 
 import wandb
-from datasets import Dataset, DatasetDict, load_dataset
+from datasets import Dataset, DatasetDict
 
-wandb.init(project='el_takehome')
+from train_model import MODEL_SAVE_DIR
+
+LOG_TO_WANDB = False
+if LOG_TO_WANDB:
+    wandb.init(project='el_takehome')
 
 # Paths
-BASE_MODEL_DIR = 'pythia-70m-arxiv-scratch'
-FINETUNE_DIR = 'pythia-70m-arxiv-finetuned'
-DATASET_DIR = 'finetuning_datasets'
+BASE_MODEL_DIR = MODEL_SAVE_DIR
+FINETUNE_DIR = './models/pythia-70m-arxiv-finetuned'
+DATASET_DIR = 'finetuning'
 TRAIN_FILE = os.path.join(DATASET_DIR, 'train.jsonl')
 DEV_FILE = os.path.join(DATASET_DIR, 'dev.jsonl')
 
@@ -38,7 +41,6 @@ def load_jsonl(path):
 
 def get_label_list(data):
     return sorted(list(set(ex['label'] for ex in data)))
-
 
 print('Loading datasets...')
 train_data = load_jsonl(TRAIN_FILE)
@@ -59,7 +61,6 @@ datasets = DatasetDict({'train': train_ds, 'validation': dev_ds})
 # 3. Tokenize
 def preprocess(example):
     return tokenizer(example['text'], truncation=True, padding=False)
-
 
 datasets = datasets.map(preprocess, batched=True)
 
@@ -97,11 +98,7 @@ def compute_metrics(eval_pred):
         'f1': f1_score(labels, preds, average='weighted'),
     }
 
-
 # 8. Custom Trainer to use weighted loss
-from transformers import Trainer
-
-
 class WeightedTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels = inputs.get('labels')
@@ -112,7 +109,6 @@ class WeightedTrainer(Trainer):
         )
         loss = loss_fct(logits, labels)
         return (loss, outputs) if return_outputs else loss
-
 
 # 9. Training arguments
 training_args = TrainingArguments(
@@ -153,3 +149,7 @@ print(f'Saving finetuned model to {FINETUNE_DIR}')
 trainer.save_model(FINETUNE_DIR)
 tokenizer.save_pretrained(FINETUNE_DIR)
 print('Done.')
+
+if LOG_TO_WANDB:
+    wandb.finish()
+    print('Wandb run finished.')
