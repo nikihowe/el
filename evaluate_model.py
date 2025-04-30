@@ -20,6 +20,11 @@ from constants import FINETUNED_MODEL_DIR, FINETUNED_DATA_PATH
 # Paths
 DEV_FILE = os.path.join(FINETUNED_DATA_PATH, 'dev.jsonl')
 TEST_FILE = os.path.join(FINETUNED_DATA_PATH, 'test_no_labels.jsonl')
+PREDICTIONS_DIR = 'predictions'
+PREDICTIONS_FILE = os.path.join(PREDICTIONS_DIR, 'test_predictions.jsonl')
+
+# Create predictions directory if it doesn't exist
+os.makedirs(PREDICTIONS_DIR, exist_ok=True)
 
 # 1. Load fine-tuned model and tokenizer
 print('Loading fine-tuned model and tokenizer...')
@@ -85,27 +90,33 @@ print(f'  Recall (Weighted): {recall:.4f}')
 # 4. Load and preprocess test dataset for prediction examples
 print('\nLoading test dataset for prediction examples...')
 test_data = load_jsonl(TEST_FILE)
-test_examples = test_data[:20]   # Take first 20 examples
-
-# Convert to Dataset for easier processing
-test_ds_subset = Dataset.from_list(
-    [{'text': ex['text']} for ex in test_examples]  # No labels here
+test_ds = Dataset.from_list(
+    [{'text': ex['text']} for ex in test_data]  # No labels here
 )
-
-test_ds_subset = test_ds_subset.map(preprocess, batched=True)
+test_ds = test_ds.map(preprocess, batched=True)
 
 # 5. Generate predictions for test examples
-print('\nGenerating predictions for first 20 test examples...')
-test_predictions = trainer.predict(test_ds_subset)
+print('\nGenerating predictions for test set...')
+test_predictions = trainer.predict(test_ds)
 test_preds_indices = np.argmax(test_predictions.predictions, axis=-1)
 test_preds_labels = [id2label[idx] for idx in test_preds_indices]
 
-# 6. Display test predictions
+# Save predictions to file
+print(f'\nSaving predictions to {PREDICTIONS_FILE}...')
+with open(PREDICTIONS_FILE, 'w') as f:
+    for example, pred_label in zip(test_data, test_preds_labels):
+        prediction_entry = {
+            'text': example['text'],
+            'predicted_label': pred_label
+        }
+        f.write(json.dumps(prediction_entry) + '\n')
+
+# 6. Display first 20 test predictions
 print('\nTest Set Predictions (First 20 Examples):')
-for i, example in enumerate(test_examples):
+for i, (example, pred_label) in enumerate(zip(test_data[:20], test_preds_labels[:20])):
     print(f'--- Example {i+1} ---')
     print(f"Text: {example['text'][:200]}...")   # Show beginning of text
-    print(f'Predicted Label: {test_preds_labels[i]}')
+    print(f'Predicted Label: {pred_label}')
     print('-' * 20)
 
 print('\nDone.')
