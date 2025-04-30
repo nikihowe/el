@@ -1,6 +1,6 @@
 import json
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 
 DATASET_DIR = './datasets/finetuning'
 FILES = ['train.jsonl', 'dev.jsonl']
