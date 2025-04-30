@@ -16,7 +16,7 @@ from datasets import Dataset, DatasetDict
 
 from constants import BASE_MODEL_DIR, FINETUNED_MODEL_DIR, FINETUNED_DATA_PATH
 
-LOG_TO_WANDB = False
+LOG_TO_WANDB = True
 if LOG_TO_WANDB:
     wandb.init(project='el_takehome')
 
@@ -112,13 +112,13 @@ training_args = TrainingArguments(
     output_dir=FINETUNED_MODEL_DIR,
     eval_strategy='epoch',
     save_strategy='epoch',
-    num_train_epochs=1,
+    num_train_epochs=10,
     per_device_train_batch_size=8,
     per_device_eval_batch_size=8,
-    learning_rate=2e-5,
+    learning_rate=1e-6,
     weight_decay=0.01,
     logging_dir=os.path.join(FINETUNED_MODEL_DIR, 'logs'),
-    logging_steps=10,
+    logging_steps=5,
     load_best_model_at_end=True,
     metric_for_best_model='f1',
     greater_is_better=True,
@@ -132,7 +132,7 @@ trainer = WeightedTrainer(
     args=training_args,
     train_dataset=datasets['train'],
     eval_dataset=datasets['validation'],
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     data_collator=data_collator,
     compute_metrics=compute_metrics,
 )
