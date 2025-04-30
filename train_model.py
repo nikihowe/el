@@ -52,7 +52,7 @@ config_values = {
     'max_grad_norm': 1.0,
     'lr_scheduler_type': 'cosine',
     'adam_beta1': 0.9,
-    'adam_beta2': 0.95,
+    'adam_beta2': 0.999,
     'adam_epsilon': 1e-6,  # NOTE: raising this from 1e-8 was necessary for stability
     'bf16': True,  # NOTE: fp16 caused `Attempting to unscale FP16 gradients` error
     # Evaluation & Logging
@@ -90,7 +90,7 @@ model_config = AutoConfig.from_pretrained(
 )
 
 print(f"Initializing {config_values['model_name']} model from scratch...")
-# NOTE: from_config without pretrained weights initializes the model with random weights
+# Initialize the model with random weights
 model = AutoModelForCausalLM.from_config(model_config)
 
 # Resize token embeddings in case tokenizer vocab size differs from config (e.g., added pad token)
@@ -107,42 +107,29 @@ print('Splitting dataset into train and validation sets...')
 train_dataset = lm_datasets['train']
 eval_dataset = lm_datasets['validation']
 
-# It will pad input_ids and create corresponding attention_mask
-# It will shift input_ids to create labels, masking padding tokens with -100
 print('Initializing Data Collator...')
+# Causal language modeling, so mlm=False
 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
+print('Calculating warmup steps...')
+# Calculate the warmup steps
+total_train_batch_size = (
+    config_values['per_device_train_batch_size']
+    * accelerator.num_processes
+    * config_values[  # Account for distributed training
+        'gradient_accumulation_steps'
+    ]
+)
+# Estimate steps per epoch
+steps_per_epoch = math.ceil(len(train_dataset) / total_train_batch_size)
+# Total estimated steps
+total_steps = int(steps_per_epoch * config_values['num_train_epochs'])
+warmup_steps = int(total_steps * config_values['warmup_ratio'])
+print(
+    f"Calculated warmup steps: {warmup_steps} ({config_values['warmup_ratio']*100:.1f}% of estimated {total_steps} total steps)"
+)
+
 print('Setting up training arguments...')
-# Calculate warmup steps based on ratio if specified
-if (
-    config_values.get('warmup_ratio') is not None
-    and config_values['eval_strategy'] != 'no'
-):
-    # Estimate total training steps
-    # This estimation might be slightly off if the last batch is smaller
-    total_train_batch_size = (
-        config_values['per_device_train_batch_size']
-        * accelerator.num_processes
-        * config_values[  # Account for distributed training
-            'gradient_accumulation_steps'
-        ]
-    )
-    # Estimate steps per epoch
-    steps_per_epoch = math.ceil(len(train_dataset) / total_train_batch_size)
-    # Total estimated steps
-    total_steps = int(steps_per_epoch * config_values['num_train_epochs'])
-    warmup_steps = int(total_steps * config_values['warmup_ratio'])
-    print(
-        f"Calculated warmup steps: {warmup_steps} ({config_values['warmup_ratio']*100:.1f}% of estimated {total_steps} total steps)"
-    )
-else:
-    # Fallback or if ratio isn't used
-    warmup_steps = config_values.get(
-        'warmup_steps', 0
-    )   # Use fixed steps if provided, else 0
-    print(f'Using fixed warmup steps: {warmup_steps}')
-
-
 training_args = TrainingArguments(
     output_dir=config_values['output_dir'],
     overwrite_output_dir=config_values['overwrite_output_dir'],
@@ -151,28 +138,15 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=config_values['gradient_accumulation_steps'],
     gradient_checkpointing=config_values['gradient_checkpointing'],
     # Evaluation args
-    # Ensure eval_strategy is 'no' if eval_dataset is None
-    eval_strategy=config_values['eval_strategy']
-    if eval_dataset is not None
-    else 'no',
-    eval_steps=config_values['eval_steps']
-    if eval_dataset is not None and config_values['eval_strategy'] != 'no'
-    else None,
+    eval_strategy=config_values['eval_strategy'],
+    eval_steps=config_values['eval_steps'],
     # Save args
-    save_strategy=config_values[
-        'eval_strategy'
-    ],  # Often align save strategy with eval
+    save_strategy=config_values['eval_strategy'],
     save_steps=config_values['save_steps'],
     save_total_limit=config_values['save_total_limit'],
-    load_best_model_at_end=True
-    if eval_dataset is not None and config_values['eval_strategy'] != 'no'
-    else False,  # Load best model based on eval
-    metric_for_best_model='loss'
-    if eval_dataset is not None and config_values['eval_strategy'] != 'no'
-    else None,
-    greater_is_better=False
-    if eval_dataset is not None and config_values['eval_strategy'] != 'no'
-    else None,  # For loss, lower is better
+    load_best_model_at_end=True,
+    metric_for_best_model='loss',
+    greater_is_better=False,
     # Logging args
     logging_strategy='steps',
     logging_steps=config_values['logging_steps'],
@@ -184,7 +158,7 @@ training_args = TrainingArguments(
     adam_beta2=config_values['adam_beta2'],
     adam_epsilon=config_values['adam_epsilon'],
     lr_scheduler_type=config_values['lr_scheduler_type'],
-    warmup_steps=warmup_steps,  # Use calculated or fixed warmup steps
+    warmup_steps=warmup_steps,
     max_grad_norm=config_values['max_grad_norm'],
     # Other args
     dataloader_num_workers=config_values['dataloader_num_workers'],
@@ -197,28 +171,25 @@ training_args = TrainingArguments(
 
 print('Initializing Trainer...')
 trainer = Trainer(
-    model=model,  # Model already moved to device if accelerator was used earlier
+    model=model,
     args=training_args,
     train_dataset=train_dataset,
-    eval_dataset=eval_dataset,  # Pass validation dataset here (can be None)
+    eval_dataset=eval_dataset,
     tokenizer=tokenizer,
-    data_collator=data_collator,  # Use the LM collator
+    data_collator=data_collator,
 )
 
 print('Starting training...')
 try:
-    train_result = (
-        trainer.train()
-    )   # Potentially resume_from_checkpoint=True/path argument here
+    train_result = trainer.train()
 
     print(
         'Training finished. Saving final model (best checkpoint if evaluated)...'
     )
     # Save model using trainer's method (handles FSDP/DDP saving)
-    # If load_best_model_at_end=True, this saves the best one found during training.
-    # Otherwise, it saves the model from the final training state.
+    # Saves the best model found during training.
     trainer.save_model()
-    trainer.save_state()   # Save optimizer, scheduler, rng states etc.
+    trainer.save_state()
 
     # Log final training metrics
     metrics = train_result.metrics
