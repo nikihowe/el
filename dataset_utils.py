@@ -40,18 +40,27 @@ def tokenize_function(examples, config_values, tokenizer):
 def group_texts(examples, block_size):
     """Concatenates texts from a batch and chunks them into blocks of fixed size."""
     concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
-    total_length = len(concatenated_examples[list(examples.keys())[0]])
+    original_total_length = len(concatenated_examples[list(examples.keys())[0]]) # Store original length
 
-    # We drop the small remainder.
-    if total_length >= block_size:
-        total_length = (total_length // block_size) * block_size
-        print(
-            f'Dropping {total_length - block_size} tokens out of {total_length} total tokens'
-        )
+    # Keep track of the length used for chunking
+    length_for_chunking = original_total_length
 
-    # Split by chunks of block_size
+    # Calculate and print dropped tokens if original length is >= block_size
+    if original_total_length >= block_size:
+        # Calculate the length that will be kept
+        length_for_chunking = (original_total_length // block_size) * block_size
+        # Calculate the actual dropped amount (remainder)
+        dropped_tokens = original_total_length - length_for_chunking
+        if dropped_tokens > 0:
+             print(
+                 f'Dropping {dropped_tokens} remainder tokens from batch total {original_total_length}'
+             )
+
+    # Split by chunks of block_size using the potentially truncated length
+    # If original_total_length < block_size, range(0, length_for_chunking, block_size) will be empty,
+    # correctly producing an empty result dictionary for that batch.
     result = {
-        k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
+        k: [t[i : i + block_size] for i in range(0, length_for_chunking, block_size)]
         for k, t in concatenated_examples.items()
     }
 
@@ -94,24 +103,37 @@ def load_datasets(config_values, tokenizer, DEBUG):
     if lm_datasets is None:
         try:
             if not config_values['overwrite_cache']:
-                print(
-                    f'Attempting to load tokenized datasets from {TOKENIZED_DATA_PATH}...'
-                )
+                print(f"Attempting to load tokenized datasets from {TOKENIZED_DATA_PATH}...")
                 tokenized_datasets = load_from_disk(TOKENIZED_DATA_PATH)
-                print('Successfully loaded cached tokenized datasets.')
+                print("Successfully loaded cached tokenized datasets.")
+
+                # --- Improved Split Mismatch Check ---
+                loaded_splits = set(tokenized_datasets.keys())
+                if config_values['validation_split_percentage'] > 0:
+                    expected_splits = {'train', 'validation'}
+                else:
+                    expected_splits = {'train'}
+
+                if loaded_splits != expected_splits:
+                    print(f"Warning: Loaded tokenized dataset splits {loaded_splits} "
+                          f"do not match expected splits {expected_splits} based on current "
+                          f"validation_split_percentage ({config_values['validation_split_percentage']}%).")
+                    if not config_values['overwrite_cache']:
+                        print("Invalidating loaded tokenized cache and forcing re-processing. "
+                              "Set overwrite_cache=True to suppress this.")
+                        tokenized_datasets = None # Invalidate loaded data
+                    # If overwrite_cache is True, we proceed with the loaded data,
+                    # as it will be overwritten later anyway.
+                # --- End Split Mismatch Check ---
+
             else:
-                print(
-                    "'overwrite_cache' is True, skipping load of tokenized data."
-                )
-                raise FileNotFoundError   # Force regeneration if overwrite is True
+                print("'overwrite_cache' is True, skipping load of tokenized data.")
+                raise FileNotFoundError # Force regeneration if overwrite is True
         except FileNotFoundError:
-            print(
-                f'Tokenized dataset not found at {TOKENIZED_DATA_PATH} or overwrite requested.'
-            )
+            print(f"Tokenized dataset not found at {TOKENIZED_DATA_PATH} or overwrite requested.")
         except Exception as e:
-            print(
-                f'Could not load tokenized dataset due to error: {e}. Will try to regenerate.'
-            )
+            print(f"Could not load tokenized dataset due to error: {e}. Will try to regenerate.")
+            tokenized_datasets = None # Ensure it's None if loading failed
 
     # 3. If tokenized failed, load and split raw data
     if tokenized_datasets is None and lm_datasets is None:
@@ -174,7 +196,6 @@ def load_datasets(config_values, tokenizer, DEBUG):
                 batched=True,
                 batch_size=config_values['map_batch_size'],
                 num_proc=config_values['preprocessing_num_workers'],
-                remove_columns=next(iter(split_dataset.values())).column_names,
                 load_from_cache_file=False,  # Cache handled by checking TOKENIZED_DATA_PATH
                 desc='Running tokenizer on dataset splits',
                 writer_batch_size=config_values['map_batch_size'],
@@ -189,15 +210,6 @@ def load_datasets(config_values, tokenizer, DEBUG):
 
     # 5. If grouped data is missing but tokenized exists, group
     if lm_datasets is None and tokenized_datasets is not None:
-        # Verify splits before grouping if loaded from cache
-        if split_dataset and set(tokenized_datasets.keys()) != set(
-            split_dataset.keys()
-        ):
-            print(
-                'Warning: Loaded tokenized dataset splits do not match current splits defined by validation_split_percentage. Re-tokenizing might be needed if config changed.'
-            )
-            # Decide if this should be an error or just a warning
-
         block_size = config_values['block_size']
         print(f'Grouping texts into blocks of size {block_size}...')
         try:
