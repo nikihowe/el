@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 import numpy as np
 import torch
@@ -16,6 +17,7 @@ from transformers import (
 
 from datasets import Dataset
 from constants import FINETUNED_MODEL_DIR, FINETUNED_DATA_PATH
+from dataset_utils import check_token_lengths
 
 # Paths
 DEV_FILE = os.path.join(FINETUNED_DATA_PATH, 'dev.jsonl')
@@ -33,6 +35,10 @@ tokenizer = AutoTokenizer.from_pretrained(FINETUNED_MODEL_DIR)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
+# Get model's maximum block size from config
+block_size = model.config.max_position_embeddings
+print(f'Model maximum block size: {block_size}')
+
 # Ensure model is on the correct device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
@@ -48,16 +54,20 @@ def load_jsonl(path):
     with open(path) as f:
         return [json.loads(line) for line in f]
 
-
 print('Loading dev dataset...')
 dev_data = load_jsonl(DEV_FILE)
+dev_texts = [ex['text'] for ex in dev_data]
+check_token_lengths(dev_texts, tokenizer, block_size, 'dev set')
+
 dev_ds = Dataset.from_list(
     [{'text': ex['text'], 'label': label2id[ex['label']]} for ex in dev_data]
 )
 
 
 def preprocess(example):
-    return tokenizer(example['text'], truncation=True, padding=False)
+    return tokenizer(
+        example['text'], truncation=True, padding=False, max_length=block_size
+    )
 
 
 dev_ds = dev_ds.map(preprocess, batched=True)
@@ -90,6 +100,9 @@ print(f'  Recall (Weighted): {recall:.4f}')
 # 4. Load and preprocess test dataset for prediction examples
 print('\nLoading test dataset for prediction examples...')
 test_data = load_jsonl(TEST_FILE)
+test_texts = [ex['text'] for ex in test_data]
+check_token_lengths(test_texts, tokenizer, block_size, 'test set')
+
 test_ds = Dataset.from_list(
     [{'text': ex['text']} for ex in test_data]  # No labels here
 )
