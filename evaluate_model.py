@@ -5,7 +5,6 @@ import numpy as np
 import torch
 from sklearn.metrics import (
     accuracy_score,
-    f1_score,
     precision_recall_fscore_support,
 )
 from transformers import (
@@ -15,18 +14,17 @@ from transformers import (
     Trainer,
 )
 
-from datasets import Dataset, DatasetDict, load_dataset
+from datasets import Dataset
+from constants import FINETUNED_MODEL_DIR, FINETUNED_DATA_PATH
 
 # Paths
-FINETUNE_DIR = 'pythia-70m-arxiv-finetuned'
-DATASET_DIR = 'finetuning_datasets'
-DEV_FILE = os.path.join(DATASET_DIR, 'dev.jsonl')
-TEST_FILE = os.path.join(DATASET_DIR, 'test_no_labels.jsonl')
+DEV_FILE = os.path.join(FINETUNED_DATA_PATH, 'dev.jsonl')
+TEST_FILE = os.path.join(FINETUNED_DATA_PATH, 'test_no_labels.jsonl')
 
 # 1. Load fine-tuned model and tokenizer
 print('Loading fine-tuned model and tokenizer...')
-model = AutoModelForSequenceClassification.from_pretrained(FINETUNE_DIR)
-tokenizer = AutoTokenizer.from_pretrained(FINETUNE_DIR)
+model = AutoModelForSequenceClassification.from_pretrained(FINETUNED_MODEL_DIR)
+tokenizer = AutoTokenizer.from_pretrained(FINETUNED_MODEL_DIR)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -64,7 +62,7 @@ print('Evaluating on dev set...')
 data_collator = DataCollatorWithPadding(tokenizer)
 trainer = Trainer(
     model=model,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     data_collator=data_collator,
 )
 
