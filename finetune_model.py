@@ -35,10 +35,8 @@ def load_jsonl(path):
     with open(path) as f:
         return [json.loads(line) for line in f]
 
-
 def get_label_list(data):
     return sorted(list(set(ex['label'] for ex in data)))
-
 
 print('Loading datasets...')
 train_data = load_jsonl(TRAIN_FILE)
@@ -59,7 +57,6 @@ datasets = DatasetDict({'train': train_ds, 'validation': dev_ds})
 # 3. Tokenize
 def preprocess(example):
     return tokenizer(example['text'], truncation=True, padding=False)
-
 
 datasets = datasets.map(preprocess, batched=True)
 
