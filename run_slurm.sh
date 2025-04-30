@@ -36,11 +36,11 @@ mkdir -p slurm_logs
 cd /network/scratch/h/howeniko/el # Or use $SLURM_SUBMIT_DIR if submitting from the script's dir
 
 # --- Job Execution ---
-echo "Starting Python script: train_model.py"
+echo "Starting Python script: pretrain_model.py"
 
 # Run the training script
 # The environment variables for caching (HF_DATASETS_CACHE) and parallelism are now set inside train_model.py
-python train_model.py
+python pretrain_model.py
 
 # --- Job Completion ---
 echo "Python script finished."
