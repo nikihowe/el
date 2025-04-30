@@ -234,6 +234,9 @@ def load_datasets(config_values, tokenizer, DEBUG):
             
             print(f'Saving grouped datasets to {PROCESSED_DATA_PATH}...')
             lm_datasets.save_to_disk(PROCESSED_DATA_PATH)
+
         except Exception as group_e:
             print(f'Error during grouping: {group_e}')
             sys.exit(1)
+    
+    return lm_datasets
