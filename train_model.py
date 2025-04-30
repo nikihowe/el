@@ -26,7 +26,8 @@ os.environ['HF_DATASETS_CACHE'] = os.path.join(os.getcwd(), 'hf_cache')
 # Avoids a warning about avoiding deadlocks with num_workers > 0
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
-wandb.init(project='el_takehome')
+if LOG_TO_WANDB:
+    wandb.init(project='el_takehome')
 
 config_values = {
     # Model & Tokenizer
@@ -97,8 +98,6 @@ model = AutoModelForCausalLM.from_config(model_config)
 model.resize_token_embeddings(len(tokenizer))
 print(f'Resized model token embeddings to: {len(tokenizer)}')
 
-# Move model to the correct device
-model = model.to(accelerator.device)
 if DEBUG:
     test_forward_pass(model, tokenizer, accelerator)
 
@@ -237,5 +236,6 @@ except Exception as train_error:
 
 finally:
     # Ensure wandb run finishes
-    wandb.finish()
-    print('Wandb run finished.')
+    if LOG_TO_WANDB:
+        wandb.finish()
+        print('Wandb run finished.')
