@@ -15,10 +15,10 @@ from transformers import (
 import wandb
 from dataset_utils import load_datasets
 from debug_utils import test_forward_pass
+from constants import BASE_MODEL_DIR as MODEL_SAVE_DIR
 
 LOG_TO_WANDB = False
 DEBUG = True
-MODEL_SAVE_DIR = './models/pythia-70m-arxiv-scratch'
 
 # Set cache directory to `scratch` partition
 # NOTE: This is necessary because the default HF cache writes to $HOME,
