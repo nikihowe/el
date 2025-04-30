@@ -1,9 +1,6 @@
 # Wandb files
 wandb/
 
-# Backup files
-trained_model_backup/
-
 # Pycache
 __pycache__/
 
@@ -16,16 +13,21 @@ venv/
 # Datasets
 datasets/
 
+# Models
+models/
+
 # Slurm logs
 slurm_logs/
 
+# Dataset downloading code
 done/
-finetuning_datasets/
-processed_datasets/
-pythia-70m-arxiv-finetuned/
-pythia-70m-arxiv-scratch/
+
+# Temporary files
 tmp_trainer/
-tokenized_datasets/
+
+# Config files
 .cursorignore
 
-arxiv-metadata-oai-snapshot.jsonl
+# Output files
+*.jsonl
+*.out
