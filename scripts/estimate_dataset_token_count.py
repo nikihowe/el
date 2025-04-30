@@ -1,7 +1,6 @@
 import argparse
 import json
 import os
-import sys
 
 from tqdm import tqdm
 from transformers import GPT2TokenizerFast
