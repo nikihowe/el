@@ -9,6 +9,32 @@ from constants import DATA_PATH, TOKENIZED_DATA_PATH, PROCESSED_DATA_PATH
 REPORT_DROPPED_TOKENS = False
 
 
+def check_token_lengths(texts, tokenizer, max_length, dataset_name):
+    """Check if any texts exceed the maximum token length.
+    
+    Args:
+        texts: List of text strings to check
+        tokenizer: Tokenizer to use for length calculation
+        max_length: Maximum allowed token length
+        dataset_name: Name of the dataset for warning messages
+    
+    Returns:
+        List of indices of texts that exceed max_length
+    """
+    tokenized = tokenizer(texts, truncation=False, padding=False)
+    lengths = [len(ids) for ids in tokenized['input_ids']]
+    too_long = [i for i, l in enumerate(lengths) if l > max_length]
+    
+    if too_long:
+        print(f'\nWarning: {len(too_long)} examples in {dataset_name} exceed maximum block size:')
+        for idx in too_long[:5]:  # Show first 5 examples that are too long
+            print(f'  Example {idx}: {lengths[idx]} tokens')
+        if len(too_long) > 5:
+            print(f'  ... and {len(too_long) - 5} more')
+        print('These examples will be truncated during processing.\n')
+    return too_long
+
+
 def tokenize_function(examples, config_values, tokenizer):
     """Tokenizes texts from a batch and returns a dictionary of tokenized texts."""
     texts = examples.get(config_values['text_field'])
