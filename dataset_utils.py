@@ -3,12 +3,14 @@ import sys
 
 from datasets import DatasetDict, load_dataset, load_from_disk
 
+# NOTE: run from project dir for correct relative paths
+
 # Original dataset
-DATA_PATH = 'datasets/pretraining/arxiv-metadata-oai-snapshot.jsonl'
+DATA_PATH = './datasets/pretraining/arxiv-metadata-oai-snapshot.jsonl'
 # Tokenized but not grouped
-TOKENIZED_DATA_PATH = 'datasets/pretraining/tokenized_datasets'
+TOKENIZED_DATA_PATH = './datasets/pretraining/tokenized_datasets'
 # Finished processed dataset, ready for training
-PROCESSED_DATA_PATH = 'datasets/pretraining/grouped_datasets'
+PROCESSED_DATA_PATH = './datasets/pretraining/grouped_datasets'
 
 REPORT_DROPPED_TOKENS = False
 
@@ -65,8 +67,6 @@ def group_texts(examples, block_size):
 
 
 def load_datasets(config_values, tokenizer, DEBUG):
-    # --- Data Loading and Processing ---
-    print('\n--- Data Loading and Processing ---')
     lm_datasets = None
     tokenized_datasets = None
     split_dataset = None
@@ -204,12 +204,11 @@ def load_datasets(config_values, tokenizer, DEBUG):
                 desc='Running tokenizer on dataset splits',
                 writer_batch_size=config_values['map_batch_size'],
             )
-            save_dir = os.path.dirname(TOKENIZED_DATA_PATH)
-            os.makedirs(save_dir, exist_ok=True)
+            
             print(f'Saving tokenized datasets to {TOKENIZED_DATA_PATH}...')
             tokenized_datasets.save_to_disk(TOKENIZED_DATA_PATH)
         except Exception as tokenize_e:
-            print(f'Error during tokenization: {tokenize_e}')
+            print(f'Error during tokenization or saving: {tokenize_e}')
             sys.exit(1)
 
     # 5. If grouped data is missing but tokenized exists, group
@@ -238,8 +237,7 @@ def load_datasets(config_values, tokenizer, DEBUG):
                     print(
                         f"Filtered {initial_count - filtered_count} empty examples from '{split}' split."
                     )
-            save_dir = os.path.dirname(PROCESSED_DATA_PATH)
-            os.makedirs(save_dir, exist_ok=True)
+            
             print(f'Saving grouped datasets to {PROCESSED_DATA_PATH}...')
             lm_datasets.save_to_disk(PROCESSED_DATA_PATH)
         except Exception as group_e:
